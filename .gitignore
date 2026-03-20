@@ -28,7 +28,3 @@ Thumbs.db
 .streamlit/secrets.toml
 runs/
 
-# Ignore all PyTorch model binaries by default,
-# but keep this project model tracked in git
-*.pt
-!best.pt
