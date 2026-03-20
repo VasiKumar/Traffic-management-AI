@@ -9,7 +9,7 @@ Full project explanation is available in [PROJECT_DOCUMENTATION.md](PROJECT_DOCU
 If deployment fails while importing `cv2` or `ultralytics`, this repo includes:
 
 - `opencv-python-headless` in `requirements.txt`
-- Linux runtime dependencies in `packages.txt` (`libgl1`, `libglib2.0-0`, `ffmpeg`)
+- Linux runtime dependency in `packages.txt` (`libgl1`)
 
 After updating dependencies, in Streamlit Cloud do:
 
