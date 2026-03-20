@@ -4,6 +4,19 @@ This project uses your trained YOLO model (`best.pt`) to analyze **2 or 3 road v
 
 Full project explanation is available in [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md).
 
+## Streamlit Cloud Notes
+
+If deployment fails while importing `cv2` or `ultralytics`, this repo includes:
+
+- `opencv-python-headless` in `requirements.txt`
+- Linux runtime dependencies in `packages.txt` (`libgl1`, `libglib2.0-0`, `ffmpeg`)
+
+After updating dependencies, in Streamlit Cloud do:
+
+1. Reboot app
+2. Clear cache
+3. Redeploy from latest commit
+
 ## What It Does
 
 - Accepts 2 or 3 videos (Road 1, Road 2, optional Road 3)

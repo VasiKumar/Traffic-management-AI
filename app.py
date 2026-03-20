@@ -17,6 +17,126 @@ from traffic_engine import analyze_road_video, build_ml_dataset, build_signal_pl
 
 
 st.set_page_config(page_title="Traffic Manage AI", page_icon="🚦", layout="wide")
+
+
+def inject_custom_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Source+Serif+4:wght@500;700&display=swap');
+
+        :root {
+            --bg-soft: #f6fbff;
+            --panel: #ffffff;
+            --ink: #0f2a3a;
+            --muted: #436173;
+            --line: #cbe3f2;
+            --accent: #0c8db3;
+            --accent-2: #1ab394;
+        }
+
+        .stApp {
+            background:
+                radial-gradient(circle at 10% 10%, #d9f6ff 0%, transparent 35%),
+                radial-gradient(circle at 90% 15%, #d9ffe8 0%, transparent 30%),
+                linear-gradient(180deg, #fafdff 0%, #f2f9ff 100%);
+            color: var(--ink);
+            font-family: 'Space Grotesk', sans-serif;
+            font-size: 18px;
+        }
+
+        .block-container {
+            max-width: 1280px;
+            padding-top: 1.2rem;
+            padding-bottom: 2rem;
+        }
+
+        h1, h2, h3 {
+            font-family: 'Source Serif 4', serif;
+            color: #0f3042;
+            letter-spacing: 0.2px;
+        }
+
+        h1 {
+            font-size: 2.35rem !important;
+        }
+
+        h2 {
+            font-size: 1.65rem !important;
+        }
+
+        h3 {
+            font-size: 1.3rem !important;
+        }
+
+        p, li, label, .stMarkdown, .stCaption {
+            font-size: 1.06rem !important;
+            color: var(--ink);
+        }
+
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #e6f6ff 0%, #effff7 100%);
+            border-right: 1px solid var(--line);
+        }
+
+        [data-testid="stSidebar"] h1,
+        [data-testid="stSidebar"] h2,
+        [data-testid="stSidebar"] h3,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] p {
+            color: #0d3448 !important;
+            font-size: 1.02rem !important;
+        }
+
+        div[data-baseweb="select"] > div,
+        .stTextInput > div > div > input,
+        .stNumberInput input,
+        .stSlider,
+        .stFileUploader {
+            font-size: 1.02rem !important;
+        }
+
+        .stButton > button {
+            background: linear-gradient(90deg, var(--accent), var(--accent-2));
+            color: #ffffff;
+            border: none;
+            border-radius: 12px;
+            font-size: 1.02rem;
+            font-weight: 700;
+            padding: 0.65rem 1rem;
+            box-shadow: 0 6px 20px rgba(12, 141, 179, 0.25);
+        }
+
+        .stButton > button:hover {
+            filter: brightness(1.05);
+            transform: translateY(-1px);
+        }
+
+        .stDataFrame, .stTable {
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            overflow: hidden;
+            background: var(--panel);
+        }
+
+        [data-testid="stMetric"] {
+            background: #ffffffcc;
+            border: 1px solid var(--line);
+            border-radius: 12px;
+            padding: 0.5rem 0.75rem;
+        }
+
+        [data-testid="stAlert"] {
+            font-size: 1.02rem;
+            border-radius: 10px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+inject_custom_theme()
 st.title("Traffic Manage AI - Adaptive Signal Planner")
 st.caption("Upload 2 or 3 road videos, detect vehicles with your YOLO model, and get ML-based traffic decisions.")
 
