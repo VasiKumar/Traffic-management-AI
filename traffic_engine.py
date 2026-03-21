@@ -22,6 +22,7 @@ DEFAULT_CLASS_WEIGHTS: Dict[str, float] = {
 
 HEAVY_VEHICLE_CLASSES = {"bus", "truck", "covered_van"}
 CLASS_COLUMNS = ["bicycle", "bike", "car", "bus", "truck", "rickshaw", "covered_van"]
+TRAFFIC_LEVEL_LABELS = {0: "Low", 1: "Medium", 2: "High"}
 
 
 @dataclass
@@ -138,7 +139,7 @@ def analyze_road_video(
             for class_id in class_ids:
                 class_name = _normalize_name(result[0].names.get(int(class_id), str(class_id)))
                 counts[class_name] = counts.get(class_name, 0) + 1
-            frame_counts[class_name] = frame_counts.get(class_name, 0) + 1
+                frame_counts[class_name] = frame_counts.get(class_name, 0) + 1
 
         frame_features = counts_to_features(frame_counts, sampled_frames=1, class_weights=weights)
         frame_features["frame_index"] = float(frame_index)
@@ -301,3 +302,114 @@ def road_feature_row(analysis: RoadAnalysis) -> Dict[str, float]:
         sampled_frames=analysis.sampled_frames,
         class_weights=DEFAULT_CLASS_WEIGHTS,
     )
+
+
+def _green_targets_from_level(
+    levels: np.ndarray,
+    min_green_seconds: int,
+    moderate_green_seconds: int,
+    max_green_seconds: int,
+) -> np.ndarray:
+    targets = []
+    for level in levels:
+        if int(level) <= 0:
+            targets.append(int(min_green_seconds))
+        elif int(level) == 1:
+            targets.append(int(moderate_green_seconds))
+        else:
+            targets.append(int(max_green_seconds))
+    return np.array(targets, dtype=int)
+
+
+def build_ml_signal_plan(
+    analyses: List[RoadAnalysis],
+    predicted_levels: np.ndarray,
+    cycle_seconds: int = 180,
+    min_green_seconds: int = 20,
+    moderate_green_seconds: int | None = None,
+    max_green_seconds: int | None = None,
+    amber_seconds_per_phase: int = 3,
+) -> List[Dict[str, float]]:
+    """Build signal plan where ML traffic levels are the main decision source."""
+    if len(analyses) < 2:
+        raise ValueError("This planner expects at least two roads.")
+    if len(analyses) != len(predicted_levels):
+        raise ValueError("Predicted traffic levels must match number of roads.")
+
+    available_green = cycle_seconds - amber_seconds_per_phase * len(analyses)
+    baseline_total = min_green_seconds * len(analyses)
+    if available_green < baseline_total:
+        available_green = baseline_total
+
+    dynamic_max = int(max(min_green_seconds + 10, round(available_green * 0.55)))
+    max_green = int(max_green_seconds) if max_green_seconds is not None else dynamic_max
+    max_green = max(max_green, min_green_seconds)
+    moderate_green = int(moderate_green_seconds) if moderate_green_seconds is not None else int(
+        round((min_green_seconds + max_green) / 2)
+    )
+    moderate_green = int(np.clip(moderate_green, min_green_seconds, max_green))
+
+    levels = np.array(predicted_levels, dtype=int)
+    targets = _green_targets_from_level(levels, min_green_seconds, moderate_green, max_green)
+    greens = targets.astype(int)
+
+    if int(greens.sum()) < available_green:
+        remainder = int(available_green - greens.sum())
+        # Prioritize extra seconds for high, then medium, then low level roads.
+        order = np.argsort(-levels)
+        i = 0
+        while remainder > 0:
+            idx = int(order[i % len(order)])
+            greens[idx] += 1
+            remainder -= 1
+            i += 1
+    elif int(greens.sum()) > available_green:
+        overflow = int(greens.sum() - available_green)
+        # Remove seconds from low first, preserving minimum safety green.
+        order = np.argsort(levels)
+        for idx in order:
+            if overflow <= 0:
+                break
+            reducible = int(greens[idx] - min_green_seconds)
+            if reducible <= 0:
+                continue
+            cut = min(reducible, overflow)
+            greens[idx] -= cut
+            overflow -= cut
+
+    ranking = sorted(
+        range(len(analyses)),
+        key=lambda i: (
+            -int(levels[i]),
+            -road_feature_row(analyses[i])["weighted_density"],
+            -analyses[i].congestion_score,
+        ),
+    )
+    rank_map = {idx: rank + 1 for rank, idx in enumerate(ranking)}
+
+    plan: List[Dict[str, float]] = []
+    for i, analysis in enumerate(analyses):
+        level = int(levels[i])
+        level_text = TRAFFIC_LEVEL_LABELS.get(level, "Unknown")
+        if level >= 2:
+            action = "High ML-priority: keep corridor moving with maximum green."
+        elif level == 1:
+            action = "Medium ML-priority: balanced green allocation."
+        else:
+            action = "Low ML-priority: assign minimum green and monitor flow."
+
+        plan.append(
+            {
+                "road": analysis.road_name,
+                "priority_rank": rank_map[i],
+                "predicted_level": level_text,
+                "predicted_level_id": level,
+                "recommended_green_s": int(greens[i]),
+                "weighted_density": round(road_feature_row(analysis)["weighted_density"], 3),
+                "rule_congestion_score": round(analysis.congestion_score, 3),
+                "action": action,
+            }
+        )
+
+    plan.sort(key=lambda x: x["priority_rank"])
+    return plan

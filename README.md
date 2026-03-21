@@ -21,11 +21,13 @@ After updating dependencies, in Streamlit Cloud do:
 
 - Accepts 2 or 3 videos (Road 1, Road 2, optional Road 3)
 - Detects vehicles per road using YOLO
-- Computes congestion score using vehicle counts and heavy vehicle ratio
-- Recommends green-time allocation for each road in one signal cycle
-- Prioritizes the highest-pressure road
-- Includes ML classifier option: Random Forest or KNN
-- Shows confusion matrix for traffic-level classification
+- Computes traffic features from YOLO detections (total vehicles, weighted density, heavy vehicle ratio, per-class counts)
+- Accepts per-road context from user dropdowns (Day/Night and Good/Bad road)
+- Adds context features to ML input (is_night, is_bad_road, night_bad_interaction)
+- Uses Random Forest or KNN as the **primary signal decision engine**
+- Maps predicted traffic level to signal timing: Low -> minimum, Medium -> moderate, High -> maximum
+- Recommends green-time allocation and road priority from ML predictions
+- Shows confusion matrix and compares ML decisions against rule-based decisions
 
 ## Vehicle Classes Supported
 
@@ -57,25 +59,37 @@ streamlit run app.py
 4. In the sidebar, ensure model path points to `best.pt`.
 5. Choose number of roads (2 or 3), upload videos, and click **Analyze Traffic and Build Plan**.
 
-## Scoring Logic (Current)
+## ML-Driven Decision Logic (Current)
 
-For each road:
+For each sampled frame and each road:
 
-- Count detected vehicles by class on sampled frames
-- Compute weighted count (heavy vehicles contribute more)
-- Compute heavy ratio = heavy vehicles / total vehicles
-- Congestion score:
+- Count detected vehicles by class
+- Compute feature vector including:
+	- total_vehicles
+	- weighted_density
+	- heavy_ratio
+	- per-class counts
+- Add user-provided context features per road:
+	- Day/Night
+	- Good/Bad road
+	- encoded as is_night, is_bad_road, and interaction term
+- Generate pseudo-labels (Low/Medium/High) from weighted-density percentiles
+- Apply a small context-aware adjustment when creating pseudo-labels so Night/Bad-road scenarios receive higher operational pressure
+- Train Random Forest or KNN on internally generated YOLO feature data
+- Predict traffic level per road
+- Convert predictions to green time:
+	- Low -> minimum green
+	- Medium -> moderate green
+	- High -> maximum green
+
+The older congestion score is still computed for comparison and analysis:
 
 ```text
 density_component = weighted_count / sampled_frames
 congestion_score = density_component * (1 + 0.65 * heavy_ratio)
 ```
 
-Signal planning:
-
-- Split cycle green time proportionally to congestion scores
-- Respect minimum green per road
-- Rank roads by congestion score
+Rule-based planning is shown side-by-side with ML planning for evaluation.
 
 ## ML Project Section (Random Forest / KNN)
 
@@ -84,8 +98,10 @@ The app includes an ML pipeline for your project report:
 - Features are extracted from sampled frames using YOLO counts:
 	- class counts
 	- weighted count
+	- weighted density
 	- total vehicles
 	- heavy vehicle ratio
+	- context flags from dropdown (Day/Night, Good/Bad road)
 - Pseudo-labels are assigned from weighted density percentiles:
 	- Low, Medium, High traffic
 - Choose classifier in sidebar:
@@ -95,7 +111,9 @@ The app includes an ML pipeline for your project report:
 	- accuracy
 	- confusion matrix
 	- predicted traffic level per road
+	- ML-driven signal plan
+	- ML vs rule-based comparison table
 
 This gives you a complete computer-vision + ML workflow for academic submission.
 
-You can modify the weights and formulas in `traffic_engine.py`.
+You can modify feature weights, ML mapping thresholds, and signal-time mapping in `traffic_engine.py`.

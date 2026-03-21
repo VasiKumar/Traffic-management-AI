@@ -8,10 +8,12 @@ Traffic Manage AI is a computer vision + machine learning project that:
 
 - takes 2 or 3 road videos,
 - detects vehicles using your trained YOLO model (`best.pt`),
-- estimates traffic pressure for each road,
-- decides which road should get more green signal time,
-- trains an ML classifier (Random Forest or KNN) for traffic level prediction,
+- builds traffic features from YOLO detections for each road,
+- accepts per-road context from dropdowns (Day/Night and Good/Bad road),
+- uses ML (Random Forest or KNN) as the main traffic decision engine,
+- decides which road should get more green signal time from ML predictions,
 - shows evaluation outputs like accuracy and confusion matrix,
+- compares ML-based decisions with rule-based decisions,
 - displays processed videos with bounding boxes and labels.
 
 The main goal is adaptive traffic control: allow heavily loaded roads to pass first and reduce congestion.
@@ -89,13 +91,14 @@ Quick-start guide (short form). This document is the full form.
 4. YOLO detects vehicles in sampled frames.
 5. Vehicle class counts are accumulated.
 6. Per-road traffic metrics are computed.
-7. Congestion scores are compared among roads.
-8. Signal plan allocates green time by congestion pressure.
-9. Processed videos are saved with boxes/labels and shown in UI.
-10. ML dataset is built from frame-level features.
-11. Random Forest or KNN is trained and tested.
-12. Accuracy and confusion matrix are shown.
-13. Predicted traffic level (Low/Medium/High) is shown per road.
+7. User context is added per road (Day/Night and Good/Bad road).
+8. ML model is trained using internal feature dataset generated from YOLO detections + context features.
+9. ML predicts per-road traffic level (Low/Medium/High).
+10. Signal plan allocates green time from predicted traffic levels.
+11. Rule-based congestion plan is computed only for comparison.
+12. Processed videos are saved with boxes/labels and shown in UI.
+13. Accuracy and confusion matrix are shown.
+14. Predicted traffic level (Low/Medium/High) is shown per road.
 
 ## 5. Vehicle Classes and Weights
 
@@ -155,7 +158,7 @@ Interpretation:
 
 ## 7. Signal Decision Algorithm
 
-Implemented in `build_signal_plan()`.
+Primary logic is implemented in `build_ml_signal_plan()`.
 
 Inputs:
 
@@ -163,16 +166,22 @@ Inputs:
 - cycle time (default 180 sec),
 - minimum green time per road (default 20 sec),
 - amber time per phase (default 3 sec).
+- per-road context inputs (Day/Night and Good/Bad road).
 
 Logic:
 
 1. Reserve amber time for each road phase.
-2. Remaining cycle time is available green time.
-3. Compute score share for each road from congestion scores.
-4. Allocate green seconds proportional to score share.
-5. Enforce minimum green limit for safety and fairness.
-6. If rounding causes overflow, cut from lower-priority roads first.
-7. Rank roads by congestion score and generate action text.
+2. Remaining cycle time becomes available green time.
+3. Predict traffic level with ML per road (Low/Medium/High).
+4. Map prediction to green target:
+	- Low -> minimum green
+	- Medium -> moderate green
+	- High -> maximum green
+5. Balance total allocated time to fit cycle constraints.
+6. Rank roads by predicted level (with weighted-density tie-break).
+7. Generate action text and final plan.
+
+Rule-based congestion scoring (`build_signal_plan()`) is still available for comparison tables and analysis.
 
 Output columns:
 
@@ -196,7 +205,10 @@ Frame-level features include:
 - total_density,
 - weighted_count,
 - weighted_density,
-- heavy_ratio.
+- heavy_ratio,
+- is_night,
+- is_bad_road,
+- night_bad_interaction.
 
 These are generated in [traffic_engine.py](traffic_engine.py).
 
@@ -208,7 +220,21 @@ Traffic levels are generated from weighted density percentiles:
 - Medium: > 33rd and <= 66th percentile
 - High: > 66th percentile
 
-This allows supervised ML training without manual annotation.
+The app applies a small contextual risk adjustment during pseudo-label generation:
+
+- Night adds pressure,
+- Bad road adds pressure,
+- Night + Bad road adds additional interaction pressure.
+
+This allows supervised ML training without manual annotation while incorporating operational conditions.
+
+### 8.3 Decision Role of ML
+
+ML is not only used for display classification. The predicted traffic level now directly controls:
+
+- road priority rank,
+- recommended green signal duration,
+- final adaptive signal plan.
 
 ### 8.3 Algorithms Used
 
@@ -276,8 +302,14 @@ In UI sidebar:
 - IoU threshold (`iou`): controls NMS merging behavior
 - Signal cycle length
 - Minimum green per road
+- Medium-traffic green and High-traffic green mapping controls
 - ML algorithm selection
 - ML test split
+
+In upload panel (per road):
+
+- Time of day dropdown: Day or Night
+- Road condition dropdown: Good or Bad
 
 ## 11. Processed Video Output
 

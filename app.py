@@ -7,13 +7,22 @@ from typing import List
 import numpy as np
 import pandas as pd
 import streamlit as st
+from sklearn.base import ClassifierMixin
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, confusion_matrix
 from sklearn.model_selection import train_test_split
 from sklearn.neighbors import KNeighborsClassifier
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from ultralytics import YOLO
 
-from traffic_engine import analyze_road_video, build_ml_dataset, build_signal_plan, road_feature_row
+from traffic_engine import (
+    TRAFFIC_LEVEL_LABELS,
+    analyze_road_video,
+    build_ml_signal_plan,
+    build_signal_plan,
+    road_feature_row,
+)
 
 
 st.set_page_config(page_title="Traffic Manage AI", page_icon="🚦", layout="wide")
@@ -167,9 +176,85 @@ def counts_to_row(counts: dict) -> dict:
     return row
 
 
-def label_to_text(label: int) -> str:
-    mapping = {0: "Low", 1: "Medium", 2: "High"}
-    return mapping.get(int(label), "Unknown")
+def context_to_features(time_of_day: str, road_condition: str) -> dict[str, float]:
+    is_night = 1.0 if time_of_day == "Night" else 0.0
+    is_bad_road = 1.0 if road_condition == "Bad" else 0.0
+    return {
+        "is_night": is_night,
+        "is_bad_road": is_bad_road,
+        "night_bad_interaction": is_night * is_bad_road,
+    }
+
+
+def context_risk_factor(time_of_day: str, road_condition: str) -> float:
+    # A lightweight contextual adjustment used to create pseudo-labels.
+    # Night and bad-road conditions increase operational traffic pressure.
+    factor = 1.0
+    if time_of_day == "Night":
+        factor += 0.12
+    if road_condition == "Bad":
+        factor += 0.18
+    if time_of_day == "Night" and road_condition == "Bad":
+        factor += 0.08
+    return factor
+
+
+def build_contextual_ml_dataset(analyses: list, road_contexts: dict[str, dict[str, str]]) -> tuple[np.ndarray, np.ndarray, list[str], dict[str, float]]:
+    feature_names = [
+        "count_bicycle",
+        "count_bike",
+        "count_car",
+        "count_bus",
+        "count_truck",
+        "count_rickshaw",
+        "count_covered_van",
+        "total_vehicles",
+        "weighted_count",
+        "heavy_ratio",
+        "total_density",
+        "weighted_density",
+        "is_night",
+        "is_bad_road",
+        "night_bad_interaction",
+    ]
+
+    all_samples: list[dict[str, float]] = []
+    adjusted_density_values: list[float] = []
+
+    for analysis in analyses:
+        context = road_contexts[analysis.road_name]
+        context_features = context_to_features(context["time_of_day"], context["road_condition"])
+        risk_factor = context_risk_factor(context["time_of_day"], context["road_condition"])
+
+        for sample in analysis.sample_features:
+            sample_row = {**sample, **context_features}
+            all_samples.append(sample_row)
+            adjusted_density_values.append(float(sample["weighted_density"]) * risk_factor)
+
+    if len(all_samples) < 6:
+        raise ValueError("Not enough samples to train classifier. Use longer videos or smaller frame-skip value.")
+
+    adjusted_density = np.array(adjusted_density_values, dtype=float)
+    q_low = float(np.percentile(adjusted_density, 33))
+    q_high = float(np.percentile(adjusted_density, 66))
+
+    rows: list[list[float]] = []
+    labels: list[int] = []
+    for sample, adjusted_value in zip(all_samples, adjusted_density_values):
+        rows.append([float(sample[name]) for name in feature_names])
+        if adjusted_value <= q_low:
+            labels.append(0)
+        elif adjusted_value <= q_high:
+            labels.append(1)
+        else:
+            labels.append(2)
+
+    return (
+        np.array(rows, dtype=float),
+        np.array(labels, dtype=int),
+        feature_names,
+        {"q_low": q_low, "q_high": q_high},
+    )
 
 
 with st.sidebar:
@@ -182,6 +267,8 @@ with st.sidebar:
     iou = st.slider("IoU threshold", min_value=0.05, max_value=0.95, value=0.45, step=0.05)
     cycle_seconds = st.slider("Signal cycle length (s)", min_value=60, max_value=300, value=180, step=10)
     min_green_seconds = st.slider("Minimum green per road (s)", min_value=10, max_value=60, value=20, step=5)
+    moderate_green_seconds = st.slider("Medium-traffic green (s)", min_value=15, max_value=90, value=35, step=5)
+    max_green_seconds = st.slider("High-traffic green (s)", min_value=20, max_value=140, value=55, step=5)
     st.subheader("ML Classifier")
     ml_algo = st.selectbox("Algorithm", options=["Random Forest", "KNN"], index=0)
     test_size = st.slider("ML test split", min_value=0.2, max_value=0.5, value=0.3, step=0.05)
@@ -189,15 +276,30 @@ with st.sidebar:
 col1, col2, col3 = st.columns(3)
 with col1:
     road1 = st.file_uploader("Road 1 video", type=["mp4", "avi", "mov", "mkv"], key="r1")
+    road1_time = st.selectbox("Road 1 time", options=["Day", "Night"], index=0, key="r1_time")
+    road1_condition = st.selectbox("Road 1 condition", options=["Good", "Bad"], index=0, key="r1_condition")
 with col2:
     road2 = st.file_uploader("Road 2 video", type=["mp4", "avi", "mov", "mkv"], key="r2")
+    road2_time = st.selectbox("Road 2 time", options=["Day", "Night"], index=0, key="r2_time")
+    road2_condition = st.selectbox("Road 2 condition", options=["Good", "Bad"], index=0, key="r2_condition")
 with col3:
     road3 = st.file_uploader("Road 3 video", type=["mp4", "avi", "mov", "mkv"], key="r3")
+    road3_time = st.selectbox("Road 3 time", options=["Day", "Night"], index=0, key="r3_time")
+    road3_condition = st.selectbox("Road 3 condition", options=["Good", "Bad"], index=0, key="r3_condition")
 
 run_btn = st.button("Analyze Traffic and Build Plan", type="primary", use_container_width=True)
 
 if run_btn:
     uploads = [road1, road2] if num_roads == 2 else [road1, road2, road3]
+    selected_contexts = [
+        {"road_name": "Road 1", "time_of_day": road1_time, "road_condition": road1_condition},
+        {"road_name": "Road 2", "time_of_day": road2_time, "road_condition": road2_condition},
+    ]
+    if num_roads == 3:
+        selected_contexts.append(
+            {"road_name": "Road 3", "time_of_day": road3_time, "road_condition": road3_condition}
+        )
+
     if any(u is None for u in uploads):
         st.error(f"Please upload all {num_roads} road videos before running analysis.")
         st.stop()
@@ -243,12 +345,19 @@ if run_btn:
 
         road_rows = []
         for a in analyses:
+            road_context = next(c for c in selected_contexts if c["road_name"] == a.road_name)
             row = {
                 "road": a.road_name,
                 "sampled_frames": a.sampled_frames,
                 "weighted_count": round(a.weighted_count, 2),
                 "heavy_ratio": round(a.heavy_ratio, 3),
                 "congestion_score": round(a.congestion_score, 3),
+                "time_of_day": road_context["time_of_day"],
+                "road_condition": road_context["road_condition"],
+                "context_risk_factor": round(
+                    context_risk_factor(road_context["time_of_day"], road_context["road_condition"]),
+                    2,
+                ),
             }
             row.update(counts_to_row(a.counts))
             road_rows.append(row)
@@ -259,19 +368,6 @@ if run_btn:
 
         st.subheader("Congestion Score Comparison")
         st.bar_chart(road_df.set_index("road")["congestion_score"])
-
-        plan = build_signal_plan(
-            analyses,
-            cycle_seconds=cycle_seconds,
-            min_green_seconds=min_green_seconds,
-        )
-        plan_df = pd.DataFrame(plan)
-        st.subheader("Recommended Signal Plan")
-        st.dataframe(plan_df, use_container_width=True)
-
-        top_road = plan_df.iloc[0]["road"]
-        top_green = int(plan_df.iloc[0]["recommended_green_s"])
-        st.success(f"Highest traffic pressure: {top_road}. Recommended immediate green: {top_green} seconds.")
 
         st.subheader("Processed Videos (Boxes + Labels)")
         video_cols = st.columns(len(analyses))
@@ -285,14 +381,26 @@ if run_btn:
 
         st.subheader("ML Traffic Classifier (Project Section)")
         st.caption("Pseudo-labels are created from weighted vehicle density percentiles per sampled frame: low, medium, high.")
+        st.info(
+            "ML decision mapping: Low -> minimum green, Medium -> moderate green, High -> maximum green. "
+            "Road context (Day/Night, Good/Bad road) is included as model features."
+        )
 
-        X, y, feature_names, quantiles = build_ml_dataset(analyses)
+        road_context_map = {
+            context["road_name"]: {
+                "time_of_day": context["time_of_day"],
+                "road_condition": context["road_condition"],
+            }
+            for context in selected_contexts
+        }
+        X, y, feature_names, quantiles = build_contextual_ml_dataset(analyses, road_context_map)
 
         unique_labels = np.unique(y)
         if len(unique_labels) < 2:
-            st.warning("ML training skipped: sampled data has only one class. Use longer or more varied videos.")
+            st.error("ML decision engine could not train because sampled data has only one class. Use longer or more varied videos.")
         else:
-            stratify = y if len(unique_labels) > 1 else None
+            min_class_count = int(np.min(np.bincount(y)))
+            stratify = y if min_class_count >= 2 else None
             X_train, X_test, y_train, y_test = train_test_split(
                 X,
                 y,
@@ -301,10 +409,19 @@ if run_btn:
                 stratify=stratify,
             )
 
+            clf: ClassifierMixin | Pipeline
             if ml_algo == "Random Forest":
                 clf = RandomForestClassifier(n_estimators=200, random_state=42)
             else:
-                clf = KNeighborsClassifier(n_neighbors=7)
+                max_k = max(1, min(7, len(X_train)))
+                if max_k > 1 and max_k % 2 == 0:
+                    max_k -= 1
+                clf = Pipeline(
+                    steps=[
+                        ("scaler", StandardScaler()),
+                        ("knn", KNeighborsClassifier(n_neighbors=max_k)),
+                    ]
+                )
 
             clf.fit(X_train, y_train)
             y_pred = clf.predict(X_test)
@@ -315,7 +432,7 @@ if run_btn:
             st.write(f"Algorithm used: {ml_algo}")
             st.write(f"Test accuracy: {acc:.3f}")
             st.write(
-                "Traffic thresholds (weighted density): "
+                "Traffic thresholds (context-adjusted weighted density): "
                 f"Low <= {quantiles['q_low']:.3f}, "
                 f"Medium <= {quantiles['q_high']:.3f}, "
                 "High > medium threshold"
@@ -332,22 +449,73 @@ if run_btn:
             road_feature_vectors = []
             for analysis in analyses:
                 row = road_feature_row(analysis)
+                context = road_context_map[analysis.road_name]
+                row.update(context_to_features(context["time_of_day"], context["road_condition"]))
                 road_feature_vectors.append([row[name] for name in feature_names])
 
             road_pred = clf.predict(np.array(road_feature_vectors, dtype=float))
-            ml_rows = []
+
+            ml_plan = build_ml_signal_plan(
+                analyses=analyses,
+                predicted_levels=road_pred,
+                cycle_seconds=cycle_seconds,
+                min_green_seconds=min_green_seconds,
+                moderate_green_seconds=moderate_green_seconds,
+                max_green_seconds=max_green_seconds,
+            )
+            ml_plan_df = pd.DataFrame(ml_plan)
+
+            st.subheader("ML-Driven Signal Plan (Primary Decision Engine)")
+            st.dataframe(ml_plan_df, use_container_width=True)
+
+            top_road = ml_plan_df.iloc[0]["road"]
+            top_green = int(ml_plan_df.iloc[0]["recommended_green_s"])
+            top_level = ml_plan_df.iloc[0]["predicted_level"]
+            st.success(
+                f"Highest ML priority: {top_road} ({top_level}). "
+                f"Recommended immediate green: {top_green} seconds."
+            )
+
+            rule_plan = build_signal_plan(
+                analyses,
+                cycle_seconds=cycle_seconds,
+                min_green_seconds=min_green_seconds,
+            )
+            rule_df = pd.DataFrame(rule_plan)[["road", "priority_rank", "recommended_green_s", "congestion_score"]]
+            rule_df = rule_df.rename(
+                columns={
+                    "priority_rank": "rule_priority_rank",
+                    "recommended_green_s": "rule_green_s",
+                }
+            )
+
+            compare_df = ml_plan_df[["road", "priority_rank", "predicted_level", "recommended_green_s"]].rename(
+                columns={
+                    "priority_rank": "ml_priority_rank",
+                    "recommended_green_s": "ml_green_s",
+                }
+            )
+            compare_df = compare_df.merge(rule_df, on="road", how="left")
+            compare_df["priority_changed"] = compare_df["ml_priority_rank"] != compare_df["rule_priority_rank"]
+            compare_df["green_delta_s"] = compare_df["ml_green_s"] - compare_df["rule_green_s"]
+
+            st.subheader("ML vs Rule-Based Decision Comparison")
+            st.dataframe(compare_df, use_container_width=True)
+
+            pred_level_rows = []
             for analysis, pred in zip(analyses, road_pred):
-                ml_rows.append(
+                context = road_context_map[analysis.road_name]
+                pred_level_rows.append(
                     {
                         "road": analysis.road_name,
-                        "predicted_level": label_to_text(int(pred)),
-                        "congestion_score": round(analysis.congestion_score, 3),
+                        "time_of_day": context["time_of_day"],
+                        "road_condition": context["road_condition"],
+                        "predicted_level": TRAFFIC_LEVEL_LABELS.get(int(pred), "Unknown"),
+                        "rule_congestion_score": round(analysis.congestion_score, 3),
                     }
                 )
-
-            ml_df = pd.DataFrame(ml_rows)
             st.write("Predicted Traffic Level per Road")
-            st.dataframe(ml_df, use_container_width=True)
+            st.dataframe(pd.DataFrame(pred_level_rows), use_container_width=True)
 
     except Exception as exc:
         st.exception(exc)

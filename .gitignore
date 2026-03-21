@@ -19,6 +19,8 @@ build/
 dist/
 *.egg-info/
 
+.env
+
 # OS/editor files
 .DS_Store
 Thumbs.db
