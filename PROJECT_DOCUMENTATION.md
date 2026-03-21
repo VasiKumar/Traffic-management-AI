@@ -228,6 +228,8 @@ The app applies a small contextual risk adjustment during pseudo-label generatio
 
 This allows supervised ML training without manual annotation while incorporating operational conditions.
 
+The ML model learns from both traffic features and contextual conditions, allowing it to capture more complex patterns than fixed rule-based systems.
+
 ### 8.3 Decision Role of ML
 
 ML is not only used for display classification. The predicted traffic level now directly controls:
@@ -356,7 +358,7 @@ streamlit run app.py
 - No object tracking between frames yet (same vehicle may be counted in multiple frames).
 - ML labels are pseudo labels, not manually ground-truth labeled.
 - Performance depends strongly on YOLO model quality.
-- Current signal planning is rule + score based, not reinforcement learning.
+- Current signal planning is primarily ML-driven with rule-based scoring retained for comparison and analysis.
 
 ## 15. Ideas for Next Improvements
 
@@ -371,7 +373,11 @@ streamlit run app.py
 
 You can explain your system in one minute:
 
-"Our system takes road videos and runs YOLO to detect vehicles by class. We convert detections into traffic features like total vehicles, heavy vehicle ratio, and weighted density. From this we compute a congestion score and allocate adaptive green times for each road in a signal cycle. For ML validation, we train Random Forest or KNN to classify traffic level into Low, Medium, and High, and show confusion matrix and accuracy. The app also displays processed videos with bounding boxes so users can visually verify detections."
+"Our system takes road videos and uses YOLO to detect vehicles by class. We extract traffic features such as total vehicles, weighted density, heavy vehicle ratio, and contextual inputs like time of day and road condition.
+
+These features are used to train a Random Forest or KNN model, which predicts traffic level as Low, Medium, or High.
+
+The predicted level is then used to allocate adaptive signal timing for each road. We also compare this ML-based decision with a rule-based congestion method and display evaluation metrics like accuracy and confusion matrix. The system also shows processed videos with bounding boxes for visual verification."
 
 ## 17. File Map
 
